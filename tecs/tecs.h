@@ -7,18 +7,22 @@ typedef unsigned long u32;
 namespace tecs
 {
 
-template <int MaxComps>
+typedef u32 ComponentHandle;
+typedef u32 EntityHandle;
+
+template <u32 MaxComps>
 struct TEntity
 {
     static constexpr auto MaxComponents = MaxComps;
-    int id;
-    int componentHandles[MaxComponents];
+    EntityHandle id;
+    ComponentHandle components[MaxComponents];
 };
 typedef TEntity<64> Entity64;
 
+
 struct ChunkEmptyEntry
 {
-    int nextFree;
+    u32 nextFree;
 };
 
 struct ComponentChunk
@@ -35,7 +39,7 @@ struct ComponentContainer
     ComponentChunk *chunks[64] = {};
 };
 
-template <typename TypeProvider, typename TheEntity, int MaxEntities_>
+template <typename TypeProvider, typename TheEntity, u32 MaxEntities_>
 class Ecs
 {
 public:
@@ -63,13 +67,14 @@ public:
 
     Entity *newEntity()
     {
-        if (componentHandleIsValid(nextFreeEntity))
+        if (entityHandleIsValid(nextFreeEntity))
         {
             Entity *e = &entities[nextFreeEntity];
-            int id = nextFreeEntity;
+            u32 id = nextFreeEntity;
             nextFreeEntity = ((ChunkEmptyEntry *)(e))->nextFree;
             ((ChunkEmptyEntry *)(e))->nextFree = 0;
-            // TODO: Consider a bitfield variable for checking component handles, so we dont need to clean up the handles list
+            // TODO: Consider a bitfield variable for checking component handles
+            // so we dont need to clean up the handles list
             *e = {};
             e->id = id;
             return e;
@@ -80,15 +85,20 @@ public:
 
     void removeEntity(Entity *entity)
     {
-        if (componentHandleIsValid(entity->id))
+        if (entityHandleIsValid(entity->id))
         {
-            int prevId = entity->id;
+            EntityHandle prevId = entity->id;
             ((ChunkEmptyEntry *)(entity))->nextFree = nextFreeEntity;
             nextFreeEntity = prevId;
         }
     }
 
-    bool componentHandleIsValid(int handle)
+    bool componentHandleIsValid(ComponentHandle handle)
+    {
+        return handle > 0;
+    }
+
+    bool entityHandleIsValid(EntityHandle handle)
     {
         return handle > 0;
     }
@@ -96,37 +106,37 @@ public:
     template <typename T>
     T &addComponent(Entity *entity)
     {
-        int compTypeId = TypeProvider::template TypeId<T>();
-        if (componentHandleIsValid(entity->componentHandles[compTypeId]))
+        u32 compTypeId = TypeProvider::template TypeId<T>();
+        if (componentHandleIsValid(entity->components[compTypeId]))
         {
-            return *accessComponentAs<T>(containers[compTypeId], entity->componentHandles[compTypeId]);
+            return *getComponentAs<T>(containers[compTypeId], entity->components[compTypeId]);
         }
 
         ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
-        int handle = addComponentToEntity(container, entity);
-        entity->componentHandles[compTypeId] = handle;
-        return *accessComponentAs<T>(container, handle);
+        ComponentHandle handle = addComponentToEntity(container, entity);
+        entity->components[compTypeId] = handle;
+        return *getComponentAs<T>(container, handle);
     }
 
     template <typename T>
     void removeComponent(Entity *entity)
     {
-        int compTypeId = TypeProvider::template TypeId<T>();
-        int handle = entity->componentHandles[compTypeId];
+        u32 compTypeId = TypeProvider::template TypeId<T>();
+        ComponentHandle handle = entity->components[compTypeId];
         assert(componentHandleIsValid(handle));
 
         ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
-        accessComponentAs<ChunkEmptyEntry>(container, handle).nextFree = container.firstFreeEntry;
+        getComponentAs<ChunkEmptyEntry>(container, handle).nextFree = container.firstFreeEntry;
         container.firstFreeEntry = handle;
     }
 
-    int addComponentToEntity(ComponentContainer &container, Entity *entity)
+    ComponentHandle addComponentToEntity(ComponentContainer &container, Entity *entity)
     {
         if (componentHandleIsValid(container.firstFreeEntry.nextFree))
         {
-            int newComponent = container.firstFreeEntry.nextFree;
+            ComponentHandle newComponent = container.firstFreeEntry.nextFree;
             ensureComponentChunkHandle(container, newComponent);
-            container.firstFreeEntry.nextFree = accessComponentAs<ChunkEmptyEntry>(container, newComponent)->nextFree;
+            container.firstFreeEntry.nextFree = getComponentAs<ChunkEmptyEntry>(container, newComponent)->nextFree;
             return newComponent;
         }
         else
@@ -134,14 +144,14 @@ public:
             // Need to expand chunk
             ComponentChunk *chunk = newChunk(container.componentSize);
             container.chunks[container.nextChunk] = chunk;
-            int newComponent = container.nextChunk * componentsPerChunk;
+            ComponentHandle newComponent = container.nextChunk * componentsPerChunk;
             container.firstFreeEntry.nextFree = newComponent + 1;
             ++container.nextChunk;
             return newComponent;
         }
     }
 
-    ComponentContainer &ensureComponentContainer(int typeId, u32 compSize)
+    ComponentContainer &ensureComponentContainer(u32 typeId, u32 compSize)
     {
         assert(compSize >= sizeof(ChunkEmptyEntry));
         if (containers[typeId].componentSize == 0)
@@ -151,46 +161,50 @@ public:
         return containers[typeId];
     }
 
-    ComponentChunk *ensureComponentChunkHandle(ComponentContainer &container, int handle)
+    ComponentChunk *ensureComponentChunkHandle(ComponentContainer &container, ComponentHandle handle)
     {
-        int chunkIndex = handle / componentsPerChunk;
-        if (container.chunks[chunkIndex] == nullptr)
+        u32 chunkIdx = handle / componentsPerChunk;
+        if (container.chunks[chunkIdx] == nullptr)
         {
-            container.chunks[chunkIndex] = newChunk(container.componentSize);
+            container.chunks[chunkIdx] = newChunk(container.componentSize);
         }
-        return container.chunks[chunkIndex];
+        return container.chunks[chunkIdx];
     }
 
-    void *accessComponent(ComponentContainer &container, int handle)
+    void *accessComponent(ComponentContainer &container, ComponentHandle handle)
     {
-        void *addr = (char *)container.chunks[handle / componentsPerChunk]->data + container.componentSize * handle;
+        u32 chunkIdx = handle / componentsPerChunk;
+        void *addr = (char *)container.chunks[chunkIdx]->data + container.componentSize * handle;
         return addr;
     }
 
     template <typename T>
-    T *accessComponentAs(ComponentContainer &container, int handle)
+    T *getComponentAs(ComponentContainer &container, ComponentHandle handle)
     {
-        T *addr = (T *)((char *)container.chunks[handle / componentsPerChunk]->data + container.componentSize * handle);
+        u32 chunkIdx = handle / componentsPerChunk;
+        T *addr = (T *)((char *)container.chunks[chunkIdx]->data + container.componentSize * handle);
         return addr;
     }
 
-    ComponentChunk *newChunk(int componentSize)
+    // TODO: Change to use arena
+    ComponentChunk *newChunk(u32 componentSize)
     {
-        ComponentChunk *c = new ComponentChunk();               // TODO: Change to use arena
+        ComponentChunk *c = new ComponentChunk();
         c->data = new char[componentSize * componentsPerChunk]; // How many to add per chunk
-        for (int i = 0; i < componentsPerChunk; ++i)
+        for (u32 i = 0; i < componentsPerChunk; ++i)
         {
             ((ChunkEmptyEntry *)((char *)c->data + componentSize * i))->nextFree = i + 1;
         }
-        ((ChunkEmptyEntry *)((char *)c->data + componentSize * (componentsPerChunk - 1)))->nextFree = 0; // Set last as invalid
+        // Set last as invalid
+        ((ChunkEmptyEntry *)((char *)c->data + componentSize * (componentsPerChunk - 1)))->nextFree = 0;
         return c;
     }
 
-    // TODO:
+    // TODO: forEach<comps>
 
 protected:
-    int nextFreeEntity;
-    static constexpr int componentsPerChunk = 128;
+    EntityHandle nextFreeEntity;
+    static constexpr u32 componentsPerChunk = 128;
     std::array<Entity, MaxEntities + 1> entities; // 0 is reserved
     std::array<ComponentContainer, 64> containers;
 };

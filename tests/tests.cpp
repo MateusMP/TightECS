@@ -35,12 +35,12 @@ class ComponentTypes
 {
 public:
     template <typename T>
-    static int TypeId();
+    static u32 TypeId();
 };
 
 #define ComponentType(Comp, id) \
     template <>                 \
-    int ComponentTypes::TypeId<Comp>() { return id; }
+    u32 ComponentTypes::TypeId<Comp>() { return id; }
 
 ComponentType(Component1, 1);
 ComponentType(Component2, 2);
@@ -60,14 +60,14 @@ TEST_CASE("Create entity starts with no components", "[entity]")
     REQUIRE(entity != nullptr);
     REQUIRE(entity->id == 1);
     for (int i = 0; i < ecs.MaxComponents; ++i) {
-        REQUIRE(entity->componentHandles[i] == 0);
+        REQUIRE(entity->components[i] == 0);
     }
 
     entity = ecs.newEntity();
     REQUIRE(entity != nullptr);
     REQUIRE(entity->id == 2);
     for (int i = 0; i < ecs.MaxComponents; ++i) {
-        REQUIRE(entity->componentHandles[i] == 0);
+        REQUIRE(entity->components[i] == 0);
     }
 }
 
@@ -109,9 +109,9 @@ TEST_CASE("Create entity starts with no components after reusing id", "[entity]"
     REQUIRE(entity != nullptr);
     REQUIRE(entity->id == 1);
     ecs.addComponent<Component1>(entity);
-    REQUIRE(ecs.componentHandleIsValid(entity->componentHandles[ComponentTypes::TypeId<Component1>()]));
+    REQUIRE(ecs.componentHandleIsValid(entity->components[ComponentTypes::TypeId<Component1>()]));
     ecs.removeEntity(entity);
     
     entity = ecs.newEntity();
-    REQUIRE(!ecs.componentHandleIsValid(entity->componentHandles[ComponentTypes::TypeId<Component1>()]));
+    REQUIRE(!ecs.componentHandleIsValid(entity->components[ComponentTypes::TypeId<Component1>()]));
 }
