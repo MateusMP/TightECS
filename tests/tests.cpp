@@ -1,8 +1,7 @@
-#include "catch2/catch.hpp"
-
-#include "../tecs/tecs.h"
-
+#include <tecs/tecs.h>
 #include <set>
+
+#include "catch2/catch.hpp"
 
 // Define some components
 struct Component1

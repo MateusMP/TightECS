@@ -20,12 +20,12 @@ typedef unsigned long u32;
     class ComponentTypes { \
     public: \
         template <typename T> \
-        static u32 TypeId(); \
+        inline static u32 TypeId(); \
     }
 
 #define REGISTER_COMPONENT_TYPE(ComponentTypes, Comp, id) \
     template <>                 \
-    u32 ComponentTypes::TypeId<Comp>() { return id; }
+    inline u32 ComponentTypes::TypeId<Comp>() { return id; }
 
 namespace tecs
 {
@@ -40,7 +40,7 @@ struct EntityHandleParts {
 };
 
 #ifndef SKIP_DEFINE_OSTREAM_SERIALIZATION
-std::ostream & operator << (std::ostream &out, const EntityHandleParts &c) {
+inline std::ostream & operator << (std::ostream &out, const EntityHandleParts &c) {
     out << "EntityHandle: " << c.alive << " " << c.generation << " " << c.id << std::endl;
     return out;
 }
