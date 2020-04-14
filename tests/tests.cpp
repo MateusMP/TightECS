@@ -78,18 +78,18 @@ TEST_CASE("Create entity starts with no components", "[entity]")
 {
     Ecs<ComponentTypes, Entity64, 1000> ecs;
 
-    Entity64* entity = ecs.newEntity();
-    REQUIRE(entity != nullptr);
-    REQUIRE(entity->id == 1);
+    EntityHandle entity = ecs.newEntity();
+    REQUIRE(ecs.isEntityAlive(entity) == true);
+    REQUIRE(entity.id == 1);
     for (int i = 0; i < ecs.MaxComponents; ++i) {
-        REQUIRE(entity->components[i] == 0);
+        REQUIRE(ecs.entityHasComponent(entity, i) == false);
     }
 
     entity = ecs.newEntity();
-    REQUIRE(entity != nullptr);
-    REQUIRE(entity->id == 2);
+    REQUIRE(ecs.isEntityAlive(entity) == true);
+    REQUIRE(entity.id == 2);
     for (int i = 0; i < ecs.MaxComponents; ++i) {
-        REQUIRE(entity->components[i] == 0);
+        REQUIRE(ecs.entityHasComponent(entity, i) == false);
     }
 }
 
@@ -98,16 +98,16 @@ TEST_CASE("Create all entities possible", "[entity]")
     SECTION("1000 entities") {
         Ecs<ComponentTypes, Entity64, 1000> ecs;
         for (int i = 1; i <= ecs.MaxEntities; ++i) {
-            Entity64* entity = ecs.newEntity();
-            REQUIRE(entity->id == i);
+            EntityHandle entity = ecs.newEntity();
+            REQUIRE(entity.id == i);
         }
     }
 
     SECTION("10000 entities") {
         auto *ecs = new Ecs<ComponentTypes, Entity64, 10000>();
         for (int i = 1; i <= ecs->MaxEntities; ++i) {
-            Entity64* entity = ecs->newEntity();
-            REQUIRE(entity->id == i);
+            EntityHandle entity = ecs->newEntity();
+            REQUIRE(entity.id == i);
         }
         delete ecs;
     }
@@ -116,10 +116,51 @@ TEST_CASE("Create all entities possible", "[entity]")
     SECTION("100000 entities") {
         auto *ecs = new Ecs<ComponentTypes, Entity64, 100000>();
         for (int i = 1; i <= ecs->MaxEntities; ++i) {
-            Entity64* entity = ecs->newEntity();
-            REQUIRE(entity->id == i);
+            EntityHandle entity = ecs->newEntity();
+            REQUIRE(entity.id == i);
         }
         delete ecs;
+    }
+}
+
+
+TEST_CASE("Generation of new entities should invalidate references", "[entity]")
+{
+    SECTION("check 1000 entities, every 3 are killed") {
+        Ecs<ComponentTypes, Entity64, 1000> ecs;
+        EntityHandle handles[1000] = {};
+        for (int i = 1; i <= ecs.MaxEntities; ++i) {
+            EntityHandle entity = ecs.newEntity();
+            REQUIRE(entity.id == i);
+            handles[i-1] = entity;
+        }
+
+        for (int i = 0; i < 1000; i+=1) {
+            EntityHandle handle = handles[i];
+            INFO("i: " << i << " Handle: " << handle);
+            if (i % 3 == 0) {
+                ecs.removeEntity(handle);
+                REQUIRE(ecs.isEntityAlive(handle) == false);
+                REQUIRE(ecs.isEntityHandleValid(handle) == false);
+            } else { // Other ids should still be alive
+                REQUIRE(ecs.isEntityAlive(handle) == true);
+                REQUIRE(ecs.isEntityHandleValid(handle) == true);
+            }
+        }
+
+        // Re-check all to make sure nothing was corrupted
+        for (int i = 0; i < 1000; i+=1) {
+            EntityHandle handle = handles[i];
+            INFO("i: " << i << " Handle: " << handle);
+            if (i % 3 == 0) {
+                REQUIRE(ecs.isEntityAlive(handle) == false);
+                REQUIRE(ecs.isEntityHandleValid(handle) == false);
+            } else { // Other ids should be alive
+                REQUIRE(ecs.isEntityAlive(handle) == true);
+                REQUIRE(ecs.isEntityHandleValid(handle) == true);
+            }
+        }
+
     }
 }
 
@@ -127,15 +168,16 @@ TEST_CASE("Create entity starts with no components after reusing id", "[entity]"
 {
     Ecs<ComponentTypes, Entity64, 1000> ecs;
 
-    Entity64* entity = ecs.newEntity();
-    REQUIRE(entity != nullptr);
-    REQUIRE(entity->id == 1);
+    EntityHandle entity = ecs.newEntity();
+    REQUIRE(ecs.isEntityAlive(entity) == true);
+    REQUIRE(entity.id == 1);
+    REQUIRE(entity.generation == 0);
     ecs.addComponent<Component1>(entity);
-    REQUIRE(ecs.isComponentHandleValid(entity->components[ComponentTypes::TypeId<Component1>()]));
+    REQUIRE(ecs.entityHasComponent<Component1>(entity));
     ecs.removeEntity(entity);
     
     entity = ecs.newEntity();
-    REQUIRE(!ecs.isComponentHandleValid(entity->components[ComponentTypes::TypeId<Component1>()]));
+    REQUIRE(!ecs.entityHasComponent<Component1>(entity));
 }
 
 
@@ -148,11 +190,11 @@ TEST_CASE("Create many entities with one component", "[entity component]")
         std::set<void*> seen;
         std::set<ComponentHandle> handles;
         for (int i = 0; i < 1000; ++i) {
-            Entity64* e = ecs.newEntity();
-            INFO("Entity Id: " << e->id);
+            EntityHandle e = ecs.newEntity();
+            INFO("Entity Id: " << e.id << " Generation " << e.generation << " is alive: " << e.alive);
 
             Component1& c1 = ecs.addComponent<Component1>(e) = {1};
-            ComponentHandle componentHandle = e->components[ComponentTypes::TypeId<Component1>()];
+            ComponentHandle componentHandle = ecs.getEntityComponentHandle<Component1>(e);
             INFO("Component Handle: " << componentHandle);
             
             // ensure we always get a unique addresses and valid handle
@@ -170,7 +212,7 @@ TEST_CASE("Loop entities with one component", "[entity loop]")
     Ecs<ComponentTypes, Entity64, 1000> ecs;
 
     for (int i = 0; i < 1000; ++i) {
-        Entity64* e = ecs.newEntity();
+        EntityHandle e = ecs.newEntity();
         ecs.addComponent<Component1>(e) = {i};
     }
     

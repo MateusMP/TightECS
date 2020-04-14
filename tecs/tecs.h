@@ -2,19 +2,42 @@
 #include <assert.h>
 #include <cassert>
 
+#ifndef SKIP_DEFINE_OSTREAM_SERIALIZATION
+#include <ostream>
+#endif
+
 typedef unsigned long u32;
+
+#define TECS_LOG_ERROR(message) ((void)0);
+#define TECS_ASSERT(expression, message) ((void)0);
+#define TECS_CHECK(expression, message) if (expression){TECS_LOG_ERROR(message);}
 
 namespace tecs
 {
 
 typedef u32 ComponentHandle;
-typedef u32 EntityHandle;
+
+struct EntityHandleParts {
+    u32 alive : 1;
+    u32 generation : 3; 
+    u32 id : 28;
+};
+
+#ifndef SKIP_DEFINE_OSTREAM_SERIALIZATION
+std::ostream & operator << (std::ostream &out, const EntityHandleParts &c) {
+    out << "EntityHandle: " << c.alive << " " << c.generation << " " << c.id << std::endl;
+    return out;
+}
+#endif
+ 
+
+typedef EntityHandleParts EntityHandle;
 
 template <u32 MaxComps>
 struct TEntity
 {
     static constexpr auto MaxComponents = MaxComps;
-    EntityHandle id;
+    EntityHandle handle;
     ComponentHandle components[MaxComponents];
 };
 typedef TEntity<64> Entity64;
@@ -65,30 +88,37 @@ public:
         nextFreeEntity = 1;
     }
 
-    Entity *newEntity()
+    EntityHandle newEntity()
     {
-        if (entityHandleIsValid(nextFreeEntity))
+        if (nextFreeEntity > 0)
         {
-            Entity *e = &entities[nextFreeEntity];
+            Entity& e = entities[nextFreeEntity];
             u32 id = nextFreeEntity;
-            nextFreeEntity = ((ChunkEmptyEntry *)(e))->nextFree;
-            ((ChunkEmptyEntry *)(e))->nextFree = 0;
+            nextFreeEntity = ((ChunkEmptyEntry *)(&e))->nextFree;
+            ((ChunkEmptyEntry *)(&e))->nextFree = 0;
             // TODO: Consider a bitfield variable for checking component handles
             // so we dont need to clean up the handles list
-            *e = {};
-            e->id = id;
-            return e;
+            EntityHandle prevHandle = e.handle;
+            e = {};
+            e.handle = e.handle;
+            e.handle.id = id;
+            e.handle.alive = 1;
+            return e.handle;
         }
-        assert(false); // No more entity space!
-        return nullptr;
+        TECS_ASSERT(0, "Can't create more entities!"); // No more entity space!
+        return {};
     }
 
-    void removeEntity(Entity *entity)
+    void removeEntity(const EntityHandle handle)
     {
-        if (entityHandleIsValid(entity->id))
+        if (isEntityHandleValid(handle))
         {
-            EntityHandle prevId = entity->id;
-            ((ChunkEmptyEntry *)(entity))->nextFree = nextFreeEntity;
+            Entity& e = entities[handle.id];
+            //((ChunkEmptyEntry *)(&e))->nextFree = nextFreeEntity;
+            e.handle.id = nextFreeEntity;
+            e.handle.generation += 1;
+            e.handle.alive = 0;
+            u32 prevId = handle.id;
             nextFreeEntity = prevId;
         }
     }
@@ -98,39 +128,73 @@ public:
         return handle > 0 && handle < componentsPerChunk * MaxComponentChunks;
     }
 
-    bool entityHandleIsValid(EntityHandle handle)
+    bool isEntityHandleValid(EntityHandle handle)
     {
-        return handle > 0;
+        return isEntityAlive(handle) && entities[handle.id].handle.generation == handle.generation;
     }
 
     template <typename T>
-    T &addComponent(Entity *entity)
+    T &addComponent(EntityHandle entityHandle)
     {
-        u32 compTypeId = TypeProvider::template TypeId<T>();
-        if (isComponentHandleValid(entity->components[compTypeId]))
+        static_assert(sizeof(T) >= sizeof(ChunkEmptyEntry));
+        if (isEntityHandleValid(entityHandle))
         {
-            return *getComponent<T>(containers[compTypeId], entity->components[compTypeId]);
-        }
+            Entity& entity = entities[entityHandle.id];
+            u32 compTypeId = TypeProvider::template TypeId<T>();
+            if (isComponentHandleValid(entity.components[compTypeId]))
+            {
+                return *getComponent<T>(containers[compTypeId], entity.components[compTypeId]);
+            }
 
-        ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
-        ComponentHandle handle = addComponentToEntity(container, entity);
-        entity->components[compTypeId] = handle;
-        return *getComponent<T>(container, handle);
+            ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
+            ComponentHandle handle = fetchNewComponentHandle(container);
+            entity.components[compTypeId] = handle;
+            return *getComponent<T>(container, handle);
+        }
+        throw ("Bad entity handle");
     }
 
     template <typename T>
-    void removeComponent(Entity *entity)
+    void removeComponent(EntityHandle entityHandle)
     {
-        u32 compTypeId = TypeProvider::template TypeId<T>();
-        ComponentHandle handle = entity->components[compTypeId];
-        assert(isComponentHandleValid(handle));
+        if (isEntityHandleValid(entityHandle)) {
 
-        ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
-        getComponent<ChunkEmptyEntry>(container, handle).nextFree = container.firstFreeEntry;
-        container.firstFreeEntry = handle;
+            u32 compTypeId = TypeProvider::template TypeId<T>();
+            ComponentHandle compHandle = entities[entityHandle.id].components[compTypeId];
+            TECS_CHECK(isComponentHandleValid(compHandle), "Component handle is not valid!");
+
+            ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
+            getComponent<ChunkEmptyEntry>(container, compHandle).nextFree = container.firstFreeEntry;
+            container.firstFreeEntry = compHandle;
+        } else {
+            TECS_LOG_ERROR("Trying to remove component of invalid entity handle! " << handle);
+        }
     }
 
-    ComponentHandle addComponentToEntity(ComponentContainer &container, Entity *entity)
+    template <typename T>
+    bool entityHasComponent(EntityHandle entity) {
+        return entityHasComponent(entity, TypeProvider::template TypeId<T>());
+    }
+
+    bool entityHasComponent(EntityHandle entity, u32 componentType) {
+        return isEntityHandleValid(entity) 
+            && isComponentHandleValid(entities[entity.id].components[componentType]);
+    }
+
+    bool isEntityAlive(EntityHandle handle) {
+        return entities[handle.id].handle.alive;
+    }
+
+    bool isMatchingComponents(Entity& entity, u32 mask) {
+        return ((entity.components[1]>0)?1:0) & (1 & mask);
+    }
+
+    template<typename T>
+    ComponentHandle getEntityComponentHandle(EntityHandle entity) {
+        return entities[entity.id].components[TypeProvider::template TypeId<T>()];
+    }
+
+    ComponentHandle fetchNewComponentHandle(ComponentContainer &container)
     {
         if (isComponentHandleValid(container.firstFreeEntry.nextFree))
         {
@@ -147,7 +211,7 @@ public:
 
     ComponentContainer &ensureComponentContainer(u32 typeId, u32 compSize)
     {
-        assert(compSize >= sizeof(ChunkEmptyEntry));
+        TECS_ASSERT(compSize >= sizeof(ChunkEmptyEntry), "Compsize must be at least size of ChunkEmptyEntry (4 bytes)");
         if (containers[typeId].componentSize == 0)
         {
             containers[typeId].componentSize = compSize;
@@ -211,22 +275,13 @@ public:
     template <typename ... Components, typename F>
     void forEach(F f) {
         u32 mask = buildComponentMask<Components...>();
-        for (EntityHandle i = 1; i <= MaxEntities; ++i) {
+        for (u32 i = 1; i <= MaxEntities; ++i) { // TODO: Keep track of last alive entity
             Entity& e = entities[i];
-            if (isEntityAlive(i) && isMatchingComponents(e, mask)) {
+            if (isEntityAlive(e.handle) && isMatchingComponents(e, mask)) {
                 f(e, getComponent<Components>(containers[TypeProvider::template TypeId<Components>()], 
                                              e.components[TypeProvider::template TypeId<Components>()])...);
             }
         }
-    }
-
-    bool isEntityAlive(EntityHandle handle) {
-        // TODO
-        return true;
-    }
-
-    bool isMatchingComponents(Entity& entity, u32 mask) {
-        return ((entity.components[1]>0)?1:0) & (1 & mask);
     }
 
     EntityHandle* entityMatchingExact(u32 mask) {
@@ -243,7 +298,7 @@ public:
 protected:
 
 
-    EntityHandle nextFreeEntity;
+    u32 nextFreeEntity;
     static constexpr u32 componentsPerChunk = 128;
     std::array<Entity, MaxEntities + 1> entities; // 0 is reserved
     std::array<ComponentContainer, Entity::MaxComponents> containers;
