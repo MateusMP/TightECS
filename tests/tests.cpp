@@ -2,6 +2,8 @@
 
 #include "../tecs/tecs.h"
 
+#include <set>
+
 // Define some components
 struct Component1
 {
@@ -51,6 +53,26 @@ ComponentType(Component5, 3);
 using namespace tecs;
 
 using EntitySystem = Ecs<ComponentTypes, Entity64, 1000>;
+
+#define MEGABYTES(bytes) 0.000001 * (double)bytes
+
+TEST_CASE("Memory footprint", "[footprint]")
+{
+    printf("Ecs<ComponentTypes, Entity64, 1.000>: %.3lf MB\n", MEGABYTES(sizeof(Ecs<ComponentTypes, Entity64, 1000>)));
+    printf("Ecs<ComponentTypes, Entity64, 10.000>: %.3lf MB\n", MEGABYTES(sizeof(Ecs<ComponentTypes, Entity64, 10000>)));
+    printf("Ecs<ComponentTypes, Entity64, 100.000>: %.3lf MB\n", MEGABYTES(sizeof(Ecs<ComponentTypes, Entity64, 100000>)));
+    printf("Ecs<ComponentTypes, Entity64, 1.000.000>: %.3lf MB\n", MEGABYTES(sizeof(Ecs<ComponentTypes, Entity64, 1000000>)));
+
+    // TODO: Implement entity chunks to reduce usage and allow unlimited entities
+    REQUIRE(sizeof(Ecs<ComponentTypes, Entity64, 1000>)    ==    278184); // 0.27 MB
+    REQUIRE(sizeof(Ecs<ComponentTypes, Entity64, 10000>)   ==   2618184); // 2.6 MB
+    REQUIRE(sizeof(Ecs<ComponentTypes, Entity64, 100000>)  ==  26018184); // 26 MB
+    REQUIRE(sizeof(Ecs<ComponentTypes, Entity64, 1000000>) == 260018184); // 260 MB
+
+    printf("1 << 31 %lu\n", (u32)1 << 31);
+    printf("1 << 61 %llu\n", ((long long)1) << 63);
+}
+
 
 TEST_CASE("Create entity starts with no components", "[entity]")
 {
@@ -109,9 +131,57 @@ TEST_CASE("Create entity starts with no components after reusing id", "[entity]"
     REQUIRE(entity != nullptr);
     REQUIRE(entity->id == 1);
     ecs.addComponent<Component1>(entity);
-    REQUIRE(ecs.componentHandleIsValid(entity->components[ComponentTypes::TypeId<Component1>()]));
+    REQUIRE(ecs.isComponentHandleValid(entity->components[ComponentTypes::TypeId<Component1>()]));
     ecs.removeEntity(entity);
     
     entity = ecs.newEntity();
-    REQUIRE(!ecs.componentHandleIsValid(entity->components[ComponentTypes::TypeId<Component1>()]));
+    REQUIRE(!ecs.isComponentHandleValid(entity->components[ComponentTypes::TypeId<Component1>()]));
 }
+
+
+TEST_CASE("Create many entities with one component", "[entity component]")
+{
+    // Make sure our chunk and ids are used properly
+    SECTION("Components should be unique for unique entities") {
+        Ecs<ComponentTypes, Entity64, 1000> ecs;
+
+        std::set<void*> seen;
+        std::set<ComponentHandle> handles;
+        for (int i = 0; i < 1000; ++i) {
+            Entity64* e = ecs.newEntity();
+            INFO("Entity Id: " << e->id);
+
+            Component1& c1 = ecs.addComponent<Component1>(e) = {1};
+            ComponentHandle componentHandle = e->components[ComponentTypes::TypeId<Component1>()];
+            INFO("Component Handle: " << componentHandle);
+            
+            // ensure we always get a unique addresses and valid handle
+            REQUIRE(ecs.isComponentHandleValid(componentHandle));
+            REQUIRE(seen.insert(&c1).second == true);
+            REQUIRE(handles.insert(componentHandle).second == true);
+        }
+        REQUIRE(seen.size() == 1000);
+    }
+}
+
+
+TEST_CASE("Loop entities with one component", "[entity loop]")
+{
+    Ecs<ComponentTypes, Entity64, 1000> ecs;
+
+    for (int i = 0; i < 1000; ++i) {
+        Entity64* e = ecs.newEntity();
+        ecs.addComponent<Component1>(e) = {i};
+    }
+    
+    int sumX = 0;
+    int timesCalled = 0;
+    ecs.forEach<Component1>([&](Entity64& e, Component1* c1){
+        sumX += c1->x;
+        ++timesCalled;
+    });
+    REQUIRE(timesCalled == 1000);
+    // Sum of sequence, first is 0 so we have only 999 numbers!
+    REQUIRE(sumX == 999*(999+1)/2);
+}
+

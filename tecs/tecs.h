@@ -28,15 +28,15 @@ struct ChunkEmptyEntry
 struct ComponentChunk
 {
     void *data;
-    u32 size;
 };
 
+static constexpr u32 MaxComponentChunks = 32;
 struct ComponentContainer
 {
     u32 componentSize = 0;
     u32 nextChunk = 0;
     ChunkEmptyEntry firstFreeEntry = {1};
-    ComponentChunk *chunks[64] = {};
+    ComponentChunk *chunks[MaxComponentChunks] = {};
 };
 
 template <typename TypeProvider, typename TheEntity, u32 MaxEntities_>
@@ -93,9 +93,9 @@ public:
         }
     }
 
-    bool componentHandleIsValid(ComponentHandle handle)
+    bool isComponentHandleValid(ComponentHandle handle)
     {
-        return handle > 0;
+        return handle > 0 && handle < componentsPerChunk * MaxComponentChunks;
     }
 
     bool entityHandleIsValid(EntityHandle handle)
@@ -107,15 +107,15 @@ public:
     T &addComponent(Entity *entity)
     {
         u32 compTypeId = TypeProvider::template TypeId<T>();
-        if (componentHandleIsValid(entity->components[compTypeId]))
+        if (isComponentHandleValid(entity->components[compTypeId]))
         {
-            return *getComponentAs<T>(containers[compTypeId], entity->components[compTypeId]);
+            return *getComponent<T>(containers[compTypeId], entity->components[compTypeId]);
         }
 
         ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
         ComponentHandle handle = addComponentToEntity(container, entity);
         entity->components[compTypeId] = handle;
-        return *getComponentAs<T>(container, handle);
+        return *getComponent<T>(container, handle);
     }
 
     template <typename T>
@@ -123,31 +123,25 @@ public:
     {
         u32 compTypeId = TypeProvider::template TypeId<T>();
         ComponentHandle handle = entity->components[compTypeId];
-        assert(componentHandleIsValid(handle));
+        assert(isComponentHandleValid(handle));
 
         ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
-        getComponentAs<ChunkEmptyEntry>(container, handle).nextFree = container.firstFreeEntry;
+        getComponent<ChunkEmptyEntry>(container, handle).nextFree = container.firstFreeEntry;
         container.firstFreeEntry = handle;
     }
 
     ComponentHandle addComponentToEntity(ComponentContainer &container, Entity *entity)
     {
-        if (componentHandleIsValid(container.firstFreeEntry.nextFree))
+        if (isComponentHandleValid(container.firstFreeEntry.nextFree))
         {
             ComponentHandle newComponent = container.firstFreeEntry.nextFree;
             ensureComponentChunkHandle(container, newComponent);
-            container.firstFreeEntry.nextFree = getComponentAs<ChunkEmptyEntry>(container, newComponent)->nextFree;
+            container.firstFreeEntry.nextFree = getComponent<ChunkEmptyEntry>(container, newComponent)->nextFree;
             return newComponent;
         }
         else
         {
-            // Need to expand chunk
-            ComponentChunk *chunk = newChunk(container.componentSize);
-            container.chunks[container.nextChunk] = chunk;
-            ComponentHandle newComponent = container.nextChunk * componentsPerChunk;
-            container.firstFreeEntry.nextFree = newComponent + 1;
-            ++container.nextChunk;
-            return newComponent;
+            return 0;
         }
     }
 
@@ -166,7 +160,7 @@ public:
         u32 chunkIdx = handle / componentsPerChunk;
         if (container.chunks[chunkIdx] == nullptr)
         {
-            container.chunks[chunkIdx] = newChunk(container.componentSize);
+            container.chunks[chunkIdx] = newChunk(container.componentSize, chunkIdx);
         }
         return container.chunks[chunkIdx];
     }
@@ -174,39 +168,87 @@ public:
     void *accessComponent(ComponentContainer &container, ComponentHandle handle)
     {
         u32 chunkIdx = handle / componentsPerChunk;
-        void *addr = (char *)container.chunks[chunkIdx]->data + container.componentSize * handle;
+        u32 insideChunkIdx = handle % componentsPerChunk;
+        void *addr = (char *)container.chunks[chunkIdx]->data + container.componentSize * insideChunkIdx;
         return addr;
     }
 
     template <typename T>
-    T *getComponentAs(ComponentContainer &container, ComponentHandle handle)
+    T *getComponent(ComponentContainer &container, ComponentHandle handle)
     {
         u32 chunkIdx = handle / componentsPerChunk;
-        T *addr = (T *)((char *)container.chunks[chunkIdx]->data + container.componentSize * handle);
+        u32 insideChunkIdx = handle % componentsPerChunk;
+        T *addr = (T *)((char *)container.chunks[chunkIdx]->data + container.componentSize * insideChunkIdx);
         return addr;
     }
 
     // TODO: Change to use arena
-    ComponentChunk *newChunk(u32 componentSize)
+    ComponentChunk *newChunk(u32 componentSize, u32 chunkIndex)
     {
         ComponentChunk *c = new ComponentChunk();
         c->data = new char[componentSize * componentsPerChunk]; // How many to add per chunk
         for (u32 i = 0; i < componentsPerChunk; ++i)
         {
-            ((ChunkEmptyEntry *)((char *)c->data + componentSize * i))->nextFree = i + 1;
+            ((ChunkEmptyEntry *)((char *)c->data + componentSize * i))->nextFree = chunkIndex*componentsPerChunk + i + 1;
         }
         // Set last as invalid
-        ((ChunkEmptyEntry *)((char *)c->data + componentSize * (componentsPerChunk - 1)))->nextFree = 0;
+        // ((ChunkEmptyEntry *)((char *)c->data + componentSize * (componentsPerChunk - 1)))->nextFree = 0;
         return c;
     }
 
-    // TODO: forEach<comps>
+    // TODO: Consider the mask iterator idea
+    // template <typename ... Components, typename F>
+    // void forEach(F f) {
+    //     EntityHandle* list = entityMatchingExact( buildComponentMask<Components...>() );
+    //     u32 i = 0;
+    //     for (EntityHandle handle = list[0]; handle != 0 && isEntityAlive(handle); ++i) {
+    //         Entity& e = entities[handle];
+    //         f(e, 
+    //             getComponent<Components>(containers[TypeProvider::template TypeId<Components>()], e.components[TypeProvider::template TypeId<Components>()])...);
+    //     }
+    // }
+
+    template <typename ... Components, typename F>
+    void forEach(F f) {
+        u32 mask = buildComponentMask<Components...>();
+        for (EntityHandle i = 1; i <= MaxEntities; ++i) {
+            Entity& e = entities[i];
+            if (isEntityAlive(i) && isMatchingComponents(e, mask)) {
+                f(e, getComponent<Components>(containers[TypeProvider::template TypeId<Components>()], 
+                                             e.components[TypeProvider::template TypeId<Components>()])...);
+            }
+        }
+    }
+
+    bool isEntityAlive(EntityHandle handle) {
+        // TODO
+        return true;
+    }
+
+    bool isMatchingComponents(Entity& entity, u32 mask) {
+        return ((entity.components[1]>0)?1:0) & (1 & mask);
+    }
+
+    EntityHandle* entityMatchingExact(u32 mask) {
+        return entityIterators[mask];
+    }
+
+    template<typename ...T>
+    u32 buildComponentMask() {
+        u32 m = {0 | TypeProvider::template TypeId<T>() ... };
+        return m;
+    }
+
 
 protected:
+
+
     EntityHandle nextFreeEntity;
     static constexpr u32 componentsPerChunk = 128;
     std::array<Entity, MaxEntities + 1> entities; // 0 is reserved
-    std::array<ComponentContainer, 64> containers;
+    std::array<ComponentContainer, Entity::MaxComponents> containers;
+
+    std::array<EntityHandle*, MaxComponents> entityIterators;
 };
 
 } // namespace tecs
