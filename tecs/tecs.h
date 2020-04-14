@@ -1,3 +1,6 @@
+#ifndef _TECS_H_
+#define _TECS_H_
+
 #include <array>
 #include <assert.h>
 #include <cassert>
@@ -12,9 +15,22 @@ typedef unsigned long u32;
 #define TECS_ASSERT(expression, message) ((void)0);
 #define TECS_CHECK(expression, message) if (expression){TECS_LOG_ERROR(message);}
 
+
+#define CREATE_COMPONENT_TYPES(ComponentTypes) \
+    class ComponentTypes { \
+    public: \
+        template <typename T> \
+        static u32 TypeId(); \
+    }
+
+#define REGISTER_COMPONENT_TYPE(ComponentTypes, Comp, id) \
+    template <>                 \
+    u32 ComponentTypes::TypeId<Comp>() { return id; }
+
 namespace tecs
 {
 
+    
 typedef u32 ComponentHandle;
 
 struct EntityHandleParts {
@@ -32,16 +48,6 @@ std::ostream & operator << (std::ostream &out, const EntityHandleParts &c) {
  
 
 typedef EntityHandleParts EntityHandle;
-
-template <u32 MaxComps>
-struct TEntity
-{
-    static constexpr auto MaxComponents = MaxComps;
-    EntityHandle handle;
-    ComponentHandle components[MaxComponents];
-};
-typedef TEntity<64> Entity64;
-
 
 struct ChunkEmptyEntry
 {
@@ -62,13 +68,20 @@ struct ComponentContainer
     ComponentChunk *chunks[MaxComponentChunks] = {};
 };
 
-template <typename TypeProvider, typename TheEntity, u32 MaxEntities_>
+template <typename TypeProvider, unsigned char MaxComponents_, u32 MaxEntities_>
 class Ecs
 {
+protected:
+    template <unsigned char MaxComps>
+    struct TEntity
+    {
+        EntityHandle handle;
+        ComponentHandle components[MaxComponents_];
+    };
 public:
-    using Entity = TheEntity;
     static constexpr auto MaxEntities = MaxEntities_;
-    static constexpr auto MaxComponents = TheEntity::MaxComponents;
+    static constexpr auto MaxComponents = MaxComponents_;
+    using Entity = TEntity<MaxComponents>;
 
     Ecs()
     {
@@ -278,7 +291,7 @@ public:
         for (u32 i = 1; i <= MaxEntities; ++i) { // TODO: Keep track of last alive entity
             Entity& e = entities[i];
             if (isEntityAlive(e.handle) && isMatchingComponents(e, mask)) {
-                f(e, getComponent<Components>(containers[TypeProvider::template TypeId<Components>()], 
+                f(e.handle, *getComponent<Components>(containers[TypeProvider::template TypeId<Components>()], 
                                              e.components[TypeProvider::template TypeId<Components>()])...);
             }
         }
@@ -288,11 +301,21 @@ public:
         return entityIterators[mask];
     }
 
-    template<typename ...T>
-    u32 buildComponentMask() {
-        u32 m = {0 | TypeProvider::template TypeId<T>() ... };
-        return m;
+    template<typename T>
+    u32 buildComponentMask(T first) {
+        return first;
     }
+
+    template<typename T, typename... Args>
+    u32 buildComponentMask(T first, Args... args) {
+        return TypeProvider::template TypeId<T>() | buildComponentMask(TypeProvider::template TypeId<Args>()...);
+    }
+
+    template<typename... Args>
+    u32 buildComponentMask() {
+        return buildComponentMask(TypeProvider::template TypeId<Args>()...);
+    }
+
 
 
 protected:
@@ -301,9 +324,11 @@ protected:
     u32 nextFreeEntity;
     static constexpr u32 componentsPerChunk = 128;
     std::array<Entity, MaxEntities + 1> entities; // 0 is reserved
-    std::array<ComponentContainer, Entity::MaxComponents> containers;
+    std::array<ComponentContainer, MaxComponents> containers;
 
     std::array<EntityHandle*, MaxComponents> entityIterators;
 };
 
 } // namespace tecs
+
+#endif
