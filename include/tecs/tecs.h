@@ -11,24 +11,75 @@
 
 typedef unsigned long u32;
 
+// Some macros used for error logging
+// Do nothing by default, define macros to use your own assert/check/logs.
+#ifndef TECS_LOG_ERROR
 #define TECS_LOG_ERROR(message) ((void)0);
-#define TECS_ASSERT(expression, message) ((void)0);
-#define TECS_CHECK(expression, message) if (expression){TECS_LOG_ERROR(message);}
+#endif
 
+#ifndef TECS_ASSERT
+#define TECS_ASSERT(expression, message) ((void)0);
+#endif
+
+#ifndef TECS_CHECK
+#define TECS_CHECK(expression, message) if (expression){TECS_LOG_ERROR(message);}
+#endif
+
+template <typename T>
+struct AlwaysFalse : std::false_type
+{
+};
 
 #define CREATE_COMPONENT_TYPES(ComponentTypes) \
     class ComponentTypes { \
-    public: \
+        public: \
         template <typename T> \
-        inline static u32 TypeId(); \
-    }
+        static u32 TypeId(){static_assert(AlwaysFalse<T>::value, "Specialize this function!"); return 0;}}
 
-#define REGISTER_COMPONENT_TYPE(ComponentTypes, Comp, id) \
+#define REGISTER_COMPONENT_TYPE(ComponentTypes, CompClass, id) \
     template <>                 \
-    inline u32 ComponentTypes::TypeId<Comp>() { return id; }
+    inline u32 ComponentTypes::TypeId<CompClass>() { return id; }
 
 namespace tecs
 {
+
+/**
+* Arena allocator used by ECS
+* The ECS does not cat about freeing memory.
+* All memory allocated by the arena can be freed by the caller
+* once the ecs goes out of scope.
+* The memory allocated is always recycled while the ecs is alive.
+* The provided memory chunk is all that the ECS will ever use.
+* Allocation of outbound memory will assert.
+*/
+struct ArenaAllocator {
+    ArenaAllocator() : base{0}, total{0}, current{0}
+    {
+    }
+    ArenaAllocator(char* memory, u32 size)
+        : base{memory}, total{size}, current{base} {
+    };
+
+    /**
+    * Allocs a chunk of memory from the arena.
+
+    * @param size Amount in bytes to allocate.
+    */
+    template<typename T>
+    T* alloc(u32 n)
+    {
+        const u32 size = sizeof(T) * n;
+        TECS_ASSERT(current + size < base + total, "Arena overflow!");
+        void* ptr = current;
+        current += size;
+        return (T*)ptr;
+    }
+
+    private:
+    char* base;
+    u32 total;
+    char* current;
+};
 
     
 typedef u32 ComponentHandle;
@@ -68,7 +119,7 @@ struct ComponentContainer
     ComponentChunk *chunks[MaxComponentChunks] = {};
 };
 
-template <typename TypeProvider, unsigned char MaxComponents_, u32 MaxEntities_>
+template <typename TypeProvider, unsigned char MaxComponents_>
 class Ecs
 {
 protected:
@@ -76,50 +127,57 @@ protected:
     struct TEntity
     {
         EntityHandle handle;
+        u32 componentsMask;
         ComponentHandle components[MaxComponents_];
     };
 public:
-    static constexpr auto MaxEntities = MaxEntities_;
     static constexpr auto MaxComponents = MaxComponents_;
     using Entity = TEntity<MaxComponents>;
 
     Ecs()
     {
-        init();
     }
 
-    void init()
+    Ecs(ArenaAllocator&& arenaAllocator, u32 maxEntities = 100'000)
     {
-        nextFreeEntity = 0;
-        entities = {};
+        init(std::move(arenaAllocator), maxEntities);
+    }
+
+    void init(ArenaAllocator&& arenaAllocator, u32 maxEntities)
+    {
+        this->maxEntities = maxEntities;
+        allocator = arenaAllocator;
+        entities = allocator.alloc<Entity>(maxEntities+1); // 0 is reserved
+        liveEntities = 0;
         containers = {};
-        for (Entity &e : entities)
-        {
-            ((ChunkEmptyEntry &)(e)).nextFree = ++nextFreeEntity;
-        }
-        ((ChunkEmptyEntry *)(entities.end() - 1))->nextFree = 0;
-        nextFreeEntity = 1;
+        nextFreeEntity = 0;
     }
 
     EntityHandle newEntity()
     {
-        if (nextFreeEntity > 0)
-        {
-            Entity& e = entities[nextFreeEntity];
-            u32 id = nextFreeEntity;
-            nextFreeEntity = ((ChunkEmptyEntry *)(&e))->nextFree;
-            ((ChunkEmptyEntry *)(&e))->nextFree = 0;
-            // TODO: Consider a bitfield variable for checking component handles
-            // so we dont need to clean up the handles list
-            EntityHandle prevHandle = e.handle;
-            e = {};
-            e.handle = e.handle;
-            e.handle.id = id;
-            e.handle.alive = 1;
-            return e.handle;
+        u32 newId;
+        if (nextFreeEntity > 0) {
+            newId = nextFreeEntity;
+            ++liveEntities;
+            nextFreeEntity = ((ChunkEmptyEntry*)(&entities[nextFreeEntity]))->nextFree;
         }
-        TECS_ASSERT(0, "Can't create more entities!"); // No more entity space!
-        return {};
+        else {
+            ++liveEntities;
+            newId = liveEntities;
+            TECS_ASSERT(newId <= maxEntities, "Can't create more entities!");
+        }
+
+        Entity& e = entities[newId];
+        u32 id = newId;
+        // TODO: Consider a bitfield variable for checking component handles
+        // so we dont need to clean up the handles list
+        EntityHandle prevHandle = e.handle;
+        e = {};
+        e.handle = e.handle;
+        e.componentsMask = 0;
+        e.handle.id = id;
+        e.handle.alive = 1;
+        return e.handle;
     }
 
     void removeEntity(const EntityHandle handle)
@@ -133,6 +191,7 @@ public:
             e.handle.alive = 0;
             u32 prevId = handle.id;
             nextFreeEntity = prevId;
+            --liveEntities;
         }
     }
 
@@ -162,6 +221,7 @@ public:
             ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
             ComponentHandle handle = fetchNewComponentHandle(container);
             entity.components[compTypeId] = handle;
+            entity.componentsMask |= compTypeId;
             return *getComponent<T>(container, handle);
         }
         throw ("Bad entity handle");
@@ -171,10 +231,11 @@ public:
     void removeComponent(EntityHandle entityHandle)
     {
         if (isEntityHandleValid(entityHandle)) {
-
+            Entity &entity = entities[entityHandle.id];
             u32 compTypeId = TypeProvider::template TypeId<T>();
-            ComponentHandle compHandle = entities[entityHandle.id].components[compTypeId];
+            ComponentHandle compHandle = entity.components[compTypeId];
             TECS_CHECK(isComponentHandleValid(compHandle), "Component handle is not valid!");
+            entity.componentsMask &= ~(1UL << compTypeId);;
 
             ComponentContainer &container = ensureComponentContainer(compTypeId, sizeof(T));
             getComponent<ChunkEmptyEntry>(container, compHandle).nextFree = container.firstFreeEntry;
@@ -191,15 +252,15 @@ public:
 
     bool entityHasComponent(EntityHandle entity, u32 componentType) {
         return isEntityHandleValid(entity) 
-            && isComponentHandleValid(entities[entity.id].components[componentType]);
+            && (entities[entity.id].componentsMask & componentType);
     }
 
     bool isEntityAlive(EntityHandle handle) {
         return entities[handle.id].handle.alive;
     }
 
-    bool isMatchingComponents(Entity& entity, u32 mask) {
-        return ((entity.components[1]>0)?1:0) & (1 & mask);
+    bool isMatchingAllComponents(Entity& entity, u32 mask) {
+        return (entity.componentsMask & mask) == mask;
     }
 
     template<typename T>
@@ -262,8 +323,8 @@ public:
     // TODO: Change to use arena
     ComponentChunk *newChunk(u32 componentSize, u32 chunkIndex)
     {
-        ComponentChunk *c = new ComponentChunk();
-        c->data = new char[componentSize * componentsPerChunk]; // How many to add per chunk
+        ComponentChunk* c = allocator.alloc<ComponentChunk>(1);
+        c->data = allocator.alloc<char>(componentSize * componentsPerChunk); // How many to add per chunk
         for (u32 i = 0; i < componentsPerChunk; ++i)
         {
             ((ChunkEmptyEntry *)((char *)c->data + componentSize * i))->nextFree = chunkIndex*componentsPerChunk + i + 1;
@@ -288,17 +349,13 @@ public:
     template <typename ... Components, typename F>
     void forEach(F f) {
         u32 mask = buildComponentMask<Components...>();
-        for (u32 i = 1; i <= MaxEntities; ++i) { // TODO: Keep track of last alive entity
+        for (u32 i = 1; i <= liveEntities; ++i) { // TODO: Find smallest component array
             Entity& e = entities[i];
-            if (isEntityAlive(e.handle) && isMatchingComponents(e, mask)) {
+            if (isEntityAlive(e.handle) && isMatchingAllComponents(e, mask)) {
                 f(e.handle, *getComponent<Components>(containers[TypeProvider::template TypeId<Components>()], 
                                              e.components[TypeProvider::template TypeId<Components>()])...);
             }
         }
-    }
-
-    EntityHandle* entityMatchingExact(u32 mask) {
-        return entityIterators[mask];
     }
 
     template<typename T>
@@ -308,7 +365,7 @@ public:
 
     template<typename T, typename... Args>
     u32 buildComponentMask(T first, Args... args) {
-        return TypeProvider::template TypeId<T>() | buildComponentMask(TypeProvider::template TypeId<Args>()...);
+        return first | buildComponentMask(args...);
     }
 
     template<typename... Args>
@@ -319,14 +376,14 @@ public:
 
 
 protected:
-
-
+    ArenaAllocator allocator;
+    
     u32 nextFreeEntity;
+    u32 liveEntities = 0;
+    u32 maxEntities;
     static constexpr u32 componentsPerChunk = 128;
-    std::array<Entity, MaxEntities + 1> entities; // 0 is reserved
+    Entity* entities = 0; // index 0 is reserved
     std::array<ComponentContainer, MaxComponents> containers;
-
-    std::array<EntityHandle*, MaxComponents> entityIterators;
 };
 
 } // namespace tecs
