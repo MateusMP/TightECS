@@ -98,6 +98,11 @@ struct EntityHandleParts {
     u32 id : 28;
 };
 
+bool operator<(const EntityHandleParts& a, const EntityHandleParts& b)
+{
+    return (*(u32*)&a) < (*(u32*)&b);
+}
+
 #ifndef SKIP_DEFINE_OSTREAM_SERIALIZATION
 inline std::ostream& operator<<(std::ostream& out, const EntityHandleParts& c)
 {
@@ -357,6 +362,40 @@ public:
     }
 
     /**
+     * @brief Get a component from an entity. 
+     *
+     * @param <T> the componen type
+     * @param entityHandle the entity to add a component
+     *
+     * @return null if not found. Valid pointer otherwise.
+     *
+    */
+    template <typename T>
+    T* getComponent(EntityHandle entityHandle)
+    {
+        static_assert(sizeof(T) >= sizeof(ChunkEmptyEntry));
+        if (isEntityHandleValid(entityHandle)) {
+            u32 compTypeId = TypeProvider::template TypeId<T>();
+
+            ComponentContainer& c = ensureComponentContainer(compTypeId, sizeof(T));
+
+            const u32 sparseEntityIdx = entityHandle.id / c.idChunkSize;
+            const u32 denseEntityIdx = entityHandle.id % c.idChunkSize;
+            if (c.sparseIds[sparseEntityIdx] == nullptr) {
+                return nullptr;
+            }
+            else {
+                u32 possibleHandle = c.sparseIds[sparseEntityIdx][denseEntityIdx];
+                if (isComponentHandleValid(possibleHandle)) {
+                    // Entity already contains the component
+                    return (T*)accessComponentData(c, possibleHandle);
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    /**
      * @brief Access existing entity component's data
      * No checks are made, use only if you know the entity and component exists.
      * Otherwise, undefined behavior
@@ -604,7 +643,7 @@ public:
                     continue;
                 }
 
-                Entity& e = entities[i];
+                Entity& e = entities[entity];
                 f(e.handle, *accessExistingComponentData<Components>(entity)...);
             }
         }
@@ -628,6 +667,7 @@ public:
         return buildComponentMask(TypeProvider::template TypeId<Args>()...);
     }
 
+    
 private:
     /**
      * @brief Check if a given component handle is valid.
@@ -734,15 +774,16 @@ private:
     void replaceDenseComponentFreeIndex(ComponentContainer& c, u32 freeHandle)
     {
         const u32 sparseIdx = freeHandle / c.chunkSize;
-        const u32 denseIdx = freeHandle % c.chunkSize;
+        const u32 denseIdx = (freeHandle % c.chunkSize);
 
         // Replace destroyed entity index with last entry, so we don't have
         // holes in the dense entities vector
         // This then will point to the next valid data index
         c.denseEntities[sparseIdx][denseIdx] =
             c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize];
+        c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize] = {};
 
-        ((ChunkEmptyEntry*)(c.denseData[sparseIdx] + denseIdx))->nextFree =
+        ((ChunkEmptyEntry*)(c.denseData[sparseIdx] + denseIdx * c.componentSize))->nextFree =
             c.freeComponentHandle.nextFree;
         c.freeComponentHandle.nextFree = freeHandle;
     }

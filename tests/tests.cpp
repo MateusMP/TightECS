@@ -316,6 +316,101 @@ TEST_CASE("Loop entities 1000 entities only one entity has 2 components",
     }
 }
 
+
+TEST_CASE("Loop entities 1000 entities only one entity has 2 components some middle entities removed",
+          "[entity loop]")
+{
+    MemoryReadyEcs ecs(MEGABYTES(1), 1000);
+
+    EntityHandle handles[1001];
+    int expectedSumC1x = 0;
+    int expectedSumC2x = 500;
+    int expectedSumC2y = 0;
+
+    int removeBegin = 5;
+    int removeEnd = 105;
+
+    for (int i = 1; i <= 1000; ++i) {
+        EntityHandle e = ecs.newEntity();
+        ecs.addComponent<Component1>(e) = {i};
+        expectedSumC1x += i;
+        if (i == 500) {
+            ecs.addComponent<Component2>(e) = {i, i * 3};
+        }
+        expectedSumC2y += i *3;
+        handles[e.id] = e;
+    }
+
+    // Remove some middle entities
+    std::set<u32> badHandles;
+    for (int i = removeBegin; i < removeEnd; ++i) {
+        badHandles.insert(handles[i].id);
+        REQUIRE(handles[i].id == i);
+        Component1* c1 = ecs.getComponent<Component1>(handles[i]);
+        REQUIRE(c1 != nullptr);
+        REQUIRE(c1->x == i);
+        expectedSumC1x -= c1->x;
+        ecs.removeEntity(handles[i]);
+    }
+
+    SECTION("Check sum of entities with Component1")
+    {
+        int sumX = 0;
+        int timesCalled = 0;
+        std::set<u32> seen;
+        std::set<EntityHandle> seenHandle;
+        std::set<int> seenValues;
+        ecs.forEach<Component1>([&](EntityHandle e, Component1& c1) {
+            INFO("E id: " << e);
+            REQUIRE(seen.insert(e.id).second == true);
+            REQUIRE(seenHandle.insert(e).second == true);
+            REQUIRE(seenValues.insert(c1.x).second == true);
+            bool found = (badHandles.find(e.id) != badHandles.end());
+            REQUIRE(!found);
+            sumX += c1.x;
+            //REQUIRE(sumX <= expectedSumC1x);
+            ++timesCalled;
+        });
+        REQUIRE(timesCalled == 1000 - (removeEnd-removeBegin));
+        // Sum of sequence, first is 0 so we have only 999 numbers!
+        REQUIRE(sumX == expectedSumC1x);
+    }
+
+    SECTION("Check for just component 2 (only one instance has it)")
+    {
+        int sumY = 0;
+        int sumX2 = 0;
+        int timesCalled = 0;
+        ecs.forEach<Component2>([&](EntityHandle e, Component2& c2) {
+            sumX2 += c2.x;
+            sumY += c2.y;
+            ++timesCalled;
+        });
+        REQUIRE(timesCalled == 1);
+        REQUIRE(sumX2 == 500);
+        REQUIRE(sumY == 500 * 3);
+    }
+
+    SECTION("Check for just both components (only one instance has it)")
+    {
+        int sumX = 0;
+        int sumY = 0;
+        int sumX2 = 0;
+        int timesCalled = 0;
+        ecs.forEach<Component1, Component2>([&](EntityHandle e, Component1& c1, Component2& c2) {
+            sumX += c1.x;
+            sumX2 += c2.x;
+            sumY += c2.y;
+            ++timesCalled;
+        });
+        REQUIRE(timesCalled == 1);
+
+        REQUIRE(sumX == 500);
+        REQUIRE(sumX2 == 500);
+        REQUIRE(sumY == 500 * 3);
+    }
+}
+
 TEST_CASE("Destroyed entity must have it's components invalidated",
           "[entity components]")
 {

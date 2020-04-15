@@ -1,10 +1,10 @@
 # Tight Entity Component System
 
 # About
-This is (yet) another implementation of an entity system.
+This is (yet) another implementation of an entity component system (ECS).
 
 However, this implementation differs in it's approach for memory allocation.
-All memory allocation is performed through a ArenaAllocator, that must be provided
+All memory allocation is performed through an ArenaAllocator, that must be provided
 before using the ECS.
 
 The implementation tries to keep components of the same type packed together
