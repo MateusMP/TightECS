@@ -9,34 +9,25 @@
 
 // Define some components
 struct Component1 {
-    int x;
+    long x;
 };
 
 struct Component2 {
-    int x;
-    int y;
+    long x;
+    long y;
 };
 
 struct Component3 {
-    int x;
-    int y;
-    int z;
+    long x;
+    long y;
+    long z;
 };
 
-struct Component4 {
-    float x;
-};
-
-struct Component5 {
-    bool a;
-};
 
 CREATE_COMPONENT_TYPES(ComponentTypes);
 REGISTER_COMPONENT_TYPE(ComponentTypes, Component1, 1);
 REGISTER_COMPONENT_TYPE(ComponentTypes, Component2, 2);
 REGISTER_COMPONENT_TYPE(ComponentTypes, Component3, 3);
-REGISTER_COMPONENT_TYPE(ComponentTypes, Component4, 3);
-REGISTER_COMPONENT_TYPE(ComponentTypes, Component5, 3);
 
 #define MEGABYTES(number) 1024 * 1024 * number
 
@@ -57,12 +48,17 @@ public:
 
 TEST_CASE("Memory footprint", "[footprint]")
 {
+    REQUIRE(sizeof(ChunkEmptyEntry) <= sizeof(EntityHandle));
+
     // Kepp track of class footprint based on maximum allowed component types
-    REQUIRE(sizeof(Ecs<ComponentTypes, 128>) == 6192); // 6 KB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 64>) == 3120);  // 3 KB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 32>) == 1584);  // 1.5 KB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 16>) == 816);   // 0.8 KB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 8>) == 432);    // 0.4 KB
+    // Can't do this tests since architectures may differ
+    // But it's good to check changes to the internal structs and see
+    // how it scales on size
+    // REQUIRE(sizeof(Ecs<ComponentTypes, 128>) == 6192); // 6 KB
+    // REQUIRE(sizeof(Ecs<ComponentTypes, 64>) == 3120);  // 3 KB
+    // REQUIRE(sizeof(Ecs<ComponentTypes, 32>) == 1584);  // 1.5 KB
+    // REQUIRE(sizeof(Ecs<ComponentTypes, 16>) == 816);   // 0.8 KB
+    // REQUIRE(sizeof(Ecs<ComponentTypes, 8>) == 432);    // 0.4 KB
 }
 
 TEST_CASE("Create entity starts with no components", "[entity]")

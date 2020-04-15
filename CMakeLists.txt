@@ -28,6 +28,6 @@ endif()
 
 
 add_custom_target(others SOURCES
-	LICENSE.txt
+	LICENSE
 	README.md
 	CMakeLists.txt)
