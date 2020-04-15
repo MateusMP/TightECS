@@ -224,7 +224,9 @@ public:
     }
 
     /**
-     * @brief removes a new entity
+     * @brief removes an entity
+     * Does nothing if the entity does not exist.
+     * Associated components are also destroyed.
      *
      * @param handle The entity to be removed
      */
@@ -232,31 +234,55 @@ public:
     {
         if (isEntityHandleValid(entityHandle))
         {
-            Entity& e = entities[entityHandle.id];
-
-            // TODO: Consider ways to reduce amount of containers we need to iterate over
-            u32 index = 0;
-            for (ComponentContainer& container : containers) {
-                removeComponentOfExistingEntity(entityHandle, index);
-                ++index;
-            }
-
-            //((ChunkEmptyEntry *)(&e))->nextFree = nextFreeEntity;
-            e.handle.id = nextFreeEntity;
-            e.handle.generation += 1;
-            e.handle.alive = 0;
-
-            u32 prevId = entityHandle.id;
-            nextFreeEntity = prevId;
-            --liveEntities;
+            destroyExistingEntity(entityHandle);
         }
     }
 
+    /**
+     * @brief removes an entity
+     * Assumes the entity is valid to be removed.
+     * Use only if known that the entity exists.
+     *
+     * @param handle The entity to be removed
+     */
+    void destroyExistingEntity(const EntityHandle entityHandle)
+    {
+        Entity& e = entities[entityHandle.id];
+
+        // TODO: Consider ways to reduce amount of containers we need to iterate over
+        u32 index = 0;
+        for (ComponentContainer& container : containers) {
+            removeComponentOfExistingEntity(entityHandle, index);
+            ++index;
+        }
+
+        e.handle.id = nextFreeEntity; // ((ChunkEmptyEntry *)(&e))->nextFree = nextFreeEntity;
+        e.handle.generation += 1;
+        e.handle.alive = 0;
+
+        u32 prevId = entityHandle.id;
+        nextFreeEntity = prevId;
+        --liveEntities;
+    }
+
+    /**
+     * @brief Check if an entity handle is valid
+     * 
+     * @param handle the entity handle
+     * 
+     * @return true if the entity is alive and is from the same generation.
+     */
     bool isEntityHandleValid(EntityHandle handle)
     {
         return isEntityAlive(handle) && entities[handle.id].handle.generation == handle.generation;
     }
 
+    /**
+     * @brief Add a component to an entity. The entity must exist!
+     * 
+     * @param <T> the componen type
+     * @param entityHandle the entity to add a component
+     */
     template <typename T>
     T &addComponent(EntityHandle entityHandle)
     {
@@ -308,46 +334,65 @@ public:
                 }
             }
         }
+        // TODO: Change this to use reserved space from component 0
+        // This can be used to check if the user is using a bad component
+        // doing some memory checking.
+        // for now throws
         throw ("Bad entity handle");
     }
 
-    void pushDenseEntity(ComponentContainer& c, EntityHandle entity) {
-        ++c.aliveComponents;
-        c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize] = entity;
-    }
-
-    void* accessComponentData(tecs::ComponentContainer& c, const u32 componentHandle)
-    {
-        u32 compSparse = componentHandle / c.chunkSize;
-        if (c.denseData[compSparse] == nullptr) {
-            // Allocate dense data chunk
-            const u32 chunkDataSize = c.componentSize * c.chunkSize;
-            c.denseData[compSparse] = allocator.alloc<char>(chunkDataSize);
-            c.denseEntities[compSparse] = allocator.alloc<EntityHandle>(c.chunkSize);
-            return c.denseData[compSparse] + (componentHandle % c.chunkSize) * c.componentSize;
-        }
-        else {
-            return c.denseData[compSparse] + (componentHandle % c.chunkSize) * c.componentSize;
-        }
-    }
-
+    /**
+     * @brief Access existing entity component's data
+     * No checks are made, use only if you know the entity and component exists.
+     * Otherwise, undefined behavior
+     * 
+     * @param <T> The component type
+     * @param entity the entity handle
+     * 
+     * @return the pointer
+     */
     template<typename T>
     T* accessExistingComponentData(u32 entity) {
         return (T*)accessExistingComponentData(TypeProvider::template TypeId<T>(), entity);
     }
 
+    /**
+     * @brief Access existing entity component's data
+     * No checks are made, use only if you know the entity and component exists.
+     * Otherwise, undefined behavior
+     * 
+     * @param type The component type
+     * @param entity the entity handle
+     * 
+     * @return the pointer
+     */
     void* accessExistingComponentData(u32 type, u32 entity) {
         ComponentContainer& c = containers[type];
         ComponentHandle component = c.sparseIds[entity / c.idChunkSize][entity % c.idChunkSize];
         return c.denseData[component / c.chunkSize] + (component % c.chunkSize) * c.componentSize;
     }
 
+    /**
+     * @brief Removes the component from a entity.
+     * Does nothing if the entity is invalid.
+     * 
+     * @param <T> component type
+     * @param entity the entity
+     */
     template <typename T>
     void removeComponent(EntityHandle entityHandle)
     {
         removeComponent(entityHandle, TypeProvider::template TypeId<T>());
     }
 
+
+    /**
+     * @brief Removes the component from a entity.
+     * Does nothing if the entity is invalid.
+     * 
+     * @param entity the entity
+     * @param componentType component type id (from TypeProvider)
+     */
     void removeComponent(EntityHandle entityHandle, u32 compTypeId)
     {
         if (isEntityHandleValid(entityHandle)) {
@@ -358,8 +403,16 @@ public:
         }
     }
 
-    void removeComponentOfExistingEntity(EntityHandle entityHandle, u32 compTypeId) {
-        ComponentContainer& c = containers[compTypeId];;
+    /**
+     * @brief Removes the component from an existing entity.
+     * Slight optimized version of removeComponent(entity).
+     * Use if you know that the entity is valid.
+     * 
+     * @param entity the entity
+     * @param componentType component type id (from TypeProvider)
+     */
+    void removeComponentOfExistingEntity(EntityHandle entityHandle, u32 componentType) {
+        ComponentContainer& c = containers[componentType];
         if (c.componentSize == 0) {
             // Component not in use
             return;
@@ -383,12 +436,28 @@ public:
         }
     }
 
-
+    /**
+     * @brief Check if the entity has a component
+     * 
+     * @param entity the entity handle to be checked
+     * 
+     * @return false if the entity is invalid or does not have the component, true otherwise
+     * .
+     **/
     template <typename T>
     bool entityHasComponent(EntityHandle entity) {
         return entityHasComponent(entity, TypeProvider::template TypeId<T>());
     }
 
+    /**
+     * @brief Check if the entity has a component
+     * 
+     * @param entity the entity handle to be checked
+     * @param componentType the component type (must be same as values provided by TypeProvider template)
+     * 
+     * @return false if the entity is invalid or does not have the component, true otherwise
+     * .
+     **/
     bool entityHasComponent(EntityHandle entity, u32 componentType) {
         if (isEntityHandleValid(entity)) {
             return getExistingEntityComponentHandle(entity.id, componentType) > 0;
@@ -396,12 +465,30 @@ public:
         return false;
     }
 
+    /**
+     * @brief Get the component handle for a given entity and component type
+     * 
+     * @param <T> the component type
+     * @param handle the entity
+     * 
+     * @return the component handle. It may be invalid if the entity does not exists
+     * or if the entity does not have the component
+     */
     template<typename T>
     ComponentHandle getEntityComponentHandle(EntityHandle handle)
     {
         return getEntityComponentHandle(handle, TypeProvider::template TypeId<T>());
     }
 
+    /**
+     * @brief Get the component handle for a given entity and component type
+     * 
+     * @param handle the entity
+     * @param componentType the component type
+     * 
+     * @return the component handle. It may be invalid if the entity does not exists
+     * or if the entity does not have the component
+     */
     ComponentHandle getEntityComponentHandle(EntityHandle handle, u32 componentType)
     {
         if (isEntityHandleValid(handle)) {
@@ -414,10 +501,13 @@ public:
     /**
      * @brief get component handle for a entity
      * 
+     * @param entity the entity
+     * @param componentType the component type (from TypeProvider)
+     * 
      * Does not check is entity exists. If it doesnt, undefined behavior.
      * Only use thing method if you know what you are doing.
      */
-    u32 getExistingEntityComponentHandle(u32 entity, u32 componentType)
+    ComponentHandle getExistingEntityComponentHandle(u32 entity, u32 componentType)
     {
         ComponentContainer& c = containers[componentType];
         if (c.componentSize == 0) {
@@ -430,40 +520,24 @@ public:
         }
     }
 
+    /**
+     * @brief Check if a entity is alive
+     * 
+     * @param handle the entity to check.
+     * 
+     * @return true if the entity is alive.
+     */
     bool isEntityAlive(EntityHandle handle) {
         return entities[handle.id].handle.alive;
     }
 
-    
-
-    ComponentContainer &ensureComponentContainer(u32 typeId, u32 compSize)
-    {
-        TECS_ASSERT(compSize >= sizeof(ChunkEmptyEntry), "Compsize must be at least size of ChunkEmptyEntry (4 bytes)");
-        ComponentContainer& c = containers[typeId];
-        if (c.componentSize == 0) {
-            c.componentSize = compSize;
-            c.chunkSize = 1024 * 4 / c.componentSize; // TODO: define something that uses cache lines well
-            // Alloc sparse ids array. Make sure to include all possible entries with +1 for fraction
-            u32 size = maxEntities / c.idChunkSize + 1;
-            c.sparseIds = allocator.alloc<u32*>(size);
-            c.denseData = allocator.alloc<char*>(MaxComponentChunks);
-            c.denseEntities = allocator.alloc<EntityHandle*>(MaxComponentChunks);
-            std::memset(c.sparseIds, 0, sizeof(u32*)*size);
-            std::memset(c.denseData, 0, sizeof(char*) * MaxComponentChunks);
-            std::memset(c.denseEntities, 0, sizeof(EntityHandle*) * MaxComponentChunks);
-        }
-        return c;
-    }
-
-    template <typename T>
-    T *getComponent(ComponentContainer &container, ComponentHandle handle)
-    {
-        u32 chunkIdx = handle / componentsPerChunk;
-        u32 insideChunkIdx = (handle % componentsPerChunk) * container.componentSize;
-        T *addr = (T *)(container.denseData[chunkIdx] + insideChunkIdx);
-        return addr;
-    }
-
+    /**
+     * @brief return the amount of currently active components of a given type
+     * 
+     * @param type the component type to check
+     * 
+     * @return the number of active components of a type
+     */
     u32 getComponentAmount(u32 type) {
         if (containers[type].componentSize == 0) {
             return 0;
@@ -472,6 +546,12 @@ public:
         }
     }
 
+    /**
+     * @brief Loops over all entities that contain a given set of components
+     * 
+     * @param f a lambda function to be used. 
+     * Signature: (EntityHandle handle, Component1& c, Component2& ... etc)
+     */
     template <typename ... Components, typename F>
     void forEach(F f) {
         u32 compType[] = {TypeProvider::template TypeId<Components>()...};
@@ -529,7 +609,58 @@ private:
     {
         return handle > 0 && handle <= componentsPerChunk * MaxComponentChunks;
     }
-    
+
+    /**
+     * @brief Fetch a component address
+     * No checks are made. Assumes component handle is valid.
+     */
+    template <typename T>
+    T *getComponent(ComponentContainer &container, ComponentHandle handle)
+    {
+        u32 chunkIdx = handle / componentsPerChunk;
+        u32 insideChunkIdx = (handle % componentsPerChunk) * container.componentSize;
+        T *addr = (T *)(container.denseData[chunkIdx] + insideChunkIdx);
+        return addr;
+    }
+
+    ComponentContainer &ensureComponentContainer(u32 typeId, u32 compSize)
+    {
+        TECS_ASSERT(compSize >= sizeof(ChunkEmptyEntry), "Compsize must be at least size of ChunkEmptyEntry (4 bytes)");
+        ComponentContainer& c = containers[typeId];
+        if (c.componentSize == 0) {
+            c.componentSize = compSize;
+            c.chunkSize = 1024 * 4 / c.componentSize; // TODO: define something that uses cache lines well
+            // Alloc sparse ids array. Make sure to include all possible entries with +1 for fraction
+            u32 size = maxEntities / c.idChunkSize + 1;
+            c.sparseIds = allocator.alloc<u32*>(size);
+            c.denseData = allocator.alloc<char*>(MaxComponentChunks);
+            c.denseEntities = allocator.alloc<EntityHandle*>(MaxComponentChunks);
+            std::memset(c.sparseIds, 0, sizeof(u32*)*size);
+            std::memset(c.denseData, 0, sizeof(char*) * MaxComponentChunks);
+            std::memset(c.denseEntities, 0, sizeof(EntityHandle*) * MaxComponentChunks);
+        }
+        return c;
+    }
+
+    void* accessComponentData(tecs::ComponentContainer& c, const u32 componentHandle)
+    {
+        u32 compSparse = componentHandle / c.chunkSize;
+        if (c.denseData[compSparse] == nullptr) {
+            // Allocate dense data chunk
+            const u32 chunkDataSize = c.componentSize * c.chunkSize;
+            c.denseData[compSparse] = allocator.alloc<char>(chunkDataSize);
+            c.denseEntities[compSparse] = allocator.alloc<EntityHandle>(c.chunkSize);
+            return c.denseData[compSparse] + (componentHandle % c.chunkSize) * c.componentSize;
+        }
+        else {
+            return c.denseData[compSparse] + (componentHandle % c.chunkSize) * c.componentSize;
+        }
+    }
+
+    void pushDenseEntity(ComponentContainer& c, EntityHandle entity) {
+        ++c.aliveComponents;
+        c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize] = entity;
+    }
 
     struct TypeAmount {
         u32 type;
