@@ -779,6 +779,8 @@ private:
         // Replace destroyed entity index with last entry, so we don't have
         // holes in the dense entities vector
         // This then will point to the next valid data index
+        // TODO: Consider if this is worth it since we might be fragmenting the vector...
+        // TODO: Do some benchmarks related to this
         c.denseEntities[sparseIdx][denseIdx] =
             c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize];
         c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize] = {};
