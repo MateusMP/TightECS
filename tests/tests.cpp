@@ -50,22 +50,25 @@ using namespace tecs;
 
 using EntitySystem = Ecs<ComponentTypes, 64>;
 
-struct MemoryReadyEcs : EntitySystem {
+class MemoryReadyEcs : public EntitySystem {
+public:
     MemoryReadyEcs(u32 memSize, u32 maxEntities)
     {
         memory = std::make_unique<char[]>(memSize);
         this->init(ArenaAllocator(memory.get(), memSize), maxEntities);
     }
+
     std::unique_ptr<char[]> memory;
 };
 
 TEST_CASE("Memory footprint", "[footprint]")
 {
-    // TODO: Implement entity chunks to reduce usage and allow unlimited entities
-    REQUIRE(sizeof(EntitySystem) == 17456);                 // 0.27 MB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 32>) == 8752);     // 2.6 MB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 16>) == 4400);       // 26 MB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 8>) == 2224);      // 260 MB
+    // Kepp track of class footprint based on maximum allowed component types
+    REQUIRE(sizeof(Ecs<ComponentTypes, 128>) == 6192);    // 6 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 64>) == 3120);     // 3 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 32>) == 1584);     // 1.5 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 16>) == 816);      // 0.8 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 8>) == 432);       // 0.4 KB
 }
 
 
@@ -162,13 +165,14 @@ TEST_CASE("Generation of new entities should invalidate references", "[entity]")
 
     }
 
-    delete memory;
+    delete[] memory;
 }
 
 TEST_CASE("Create entity starts with no components after reusing id", "[entity]")
 {
-    char memory[8000];
-    EntitySystem ecs(ArenaAllocator(memory, 8000), 2);
+    constexpr u32 memSize = 1024 * 16;
+    char memory[memSize];
+    EntitySystem ecs(ArenaAllocator(memory, memSize), 2);
 
     EntityHandle entity = ecs.newEntity();
     REQUIRE(ecs.isEntityAlive(entity) == true);
@@ -190,19 +194,15 @@ TEST_CASE("Create many entities with one component", "[entity component]")
         MemoryReadyEcs ecs(MEGABYTES(1), 1000);
 
         std::set<void*> seen;
-        std::set<ComponentHandle> handles;
         for (int i = 0; i < 1000; ++i) {
             EntityHandle e = ecs.newEntity();
             INFO("Entity Id: " << e.id << " Generation " << e.generation << " is alive: " << e.alive);
 
             Component1& c1 = ecs.addComponent<Component1>(e) = {1};
-            ComponentHandle componentHandle = ecs.getEntityComponentHandle<Component1>(e);
-            INFO("Component Handle: " << componentHandle);
-            
+
             // ensure we always get a unique addresses and valid handle
-            REQUIRE(ecs.isComponentHandleValid(componentHandle));
+            REQUIRE(ecs.entityHasComponent<Component1>(e));
             REQUIRE(seen.insert(&c1).second == true);
-            REQUIRE(handles.insert(componentHandle).second == true);
         }
         REQUIRE(seen.size() == 1000);
     }
@@ -316,5 +316,22 @@ TEST_CASE("Loop entities 1000 entities only one entity has 2 components", "[enti
         REQUIRE(sumX == 500);
         REQUIRE(sumX == sumX2);
         REQUIRE(sumY == sumX2 * 3);
+    }
+}
+
+
+TEST_CASE("Destroyed entity must have it's components invalidated", "[entity components]")
+{
+    MemoryReadyEcs ecs(MEGABYTES(1), 1000);
+
+    for (int i = 0; i < 1000; ++i) {
+        EntityHandle e = ecs.newEntity();
+        ecs.addComponent<Component1>(e) = {i};
+        ecs.addComponent<Component2>(e) = {i, i * 3};
+        REQUIRE(ecs.entityHasComponent<Component1>(e));
+        REQUIRE(ecs.entityHasComponent<Component2>(e));
+        ecs.removeEntity(e);
+        REQUIRE(!ecs.entityHasComponent<Component1>(e));
+        REQUIRE(!ecs.entityHasComponent<Component2>(e));
     }
 }
