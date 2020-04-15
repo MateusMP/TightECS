@@ -119,6 +119,13 @@ struct ComponentContainer
     ComponentChunk *chunks[MaxComponentChunks] = {};
 };
 
+/**
+* @brief Entity Managing Class. Responsible for the creation and removal of entities and components.
+* Requires a ArenaAllocator to perform memory allocations.
+* The Ecs will only use memory available in the ArenaAllocator for dynamic allocations.
+* The memory in ArenaAllocator is never freed and always recycled.
+* Make sure to provide a big enough chunk of memory for your use case.
+*/
 template <typename TypeProvider, unsigned char MaxComponents_>
 class Ecs
 {
@@ -134,15 +141,36 @@ public:
     static constexpr auto MaxComponents = MaxComponents_;
     using Entity = TEntity<MaxComponents>;
 
+    /**
+    * @brief Default constructor provided for convinience.
+    * Should be initialized by calling @see init()
+    */
     Ecs()
     {
     }
 
+    /**
+    * @brief Contructor with arena allocator and max entities.
+    * Max entities is required to allocate the space for containing
+    * these entities up-front. 
+    * This avoids the need to check/create chunk for entities.
+    *
+    * @param arenaAllocator ArenaAllocator already initialized with memory
+    * @param maxEntities Maximum number of entities that the Ecs is expected to have
+    * 
+    * TODO: Accept 0 as "unbounded" option.
+    */
     Ecs(ArenaAllocator&& arenaAllocator, u32 maxEntities = 100'000)
     {
         init(std::move(arenaAllocator), maxEntities);
     }
 
+    /**
+    * @brief initializes the Ecs structure.
+    *
+    * @param arenaAllocator ArenaAllocator already initialized with memory
+    * @param maxEntities Maximum number of entities that the Ecs is expected to have
+    */
     void init(ArenaAllocator&& arenaAllocator, u32 maxEntities)
     {
         this->maxEntities = maxEntities;
@@ -153,6 +181,11 @@ public:
         nextFreeEntity = 0;
     }
 
+    /**
+    * @brief Creates a new entity
+    *
+    * @return Returns a EntityHandle to be used for further operations @see addComponent(), removeEntity()
+    */
     EntityHandle newEntity()
     {
         u32 newId;
