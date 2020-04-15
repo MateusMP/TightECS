@@ -11,7 +11,7 @@ target_include_directories(tecs INTERFACE include)
 
 if(TECS_BUILD_EXAMPLES)
   add_executable(example1 EXCLUDE_FROM_ALL
-    example/example1.cpp)
+    examples/example1.cpp)
   set_property(TARGET example1 PROPERTY CXX_STANDARD 17)
   target_link_libraries(example1 tecs)
 endif()
