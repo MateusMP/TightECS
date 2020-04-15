@@ -2,38 +2,32 @@
 
 #include "catch2/catch.hpp"
 
-
 #define TECS_CHECK(expr, message) INFO(message) REQUIRE(expr)
 #define TECS_ASSERT(expr, message) INFO(message) REQUIRE(expr)
 
 #include <tecs/tecs.h>
 
 // Define some components
-struct Component1
-{
+struct Component1 {
     int x;
 };
 
-struct Component2
-{
+struct Component2 {
     int x;
     int y;
 };
 
-struct Component3
-{
+struct Component3 {
     int x;
     int y;
     int z;
 };
 
-struct Component4
-{
+struct Component4 {
     float x;
 };
 
-struct Component5
-{
+struct Component5 {
     bool a;
 };
 
@@ -64,13 +58,12 @@ public:
 TEST_CASE("Memory footprint", "[footprint]")
 {
     // Kepp track of class footprint based on maximum allowed component types
-    REQUIRE(sizeof(Ecs<ComponentTypes, 128>) == 6192);    // 6 KB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 64>) == 3120);     // 3 KB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 32>) == 1584);     // 1.5 KB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 16>) == 816);      // 0.8 KB
-    REQUIRE(sizeof(Ecs<ComponentTypes, 8>) == 432);       // 0.4 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 128>) == 6192); // 6 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 64>) == 3120);  // 3 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 32>) == 1584);  // 1.5 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 16>) == 816);   // 0.8 KB
+    REQUIRE(sizeof(Ecs<ComponentTypes, 8>) == 432);    // 0.4 KB
 }
-
 
 TEST_CASE("Create entity starts with no components", "[entity]")
 {
@@ -96,7 +89,8 @@ TEST_CASE("Create all entities possible", "[entity]")
     // Reuse same memory for all sections
     char* memory = new char[MEGABYTES(50)];
 
-    SECTION("1000 entities") {
+    SECTION("1000 entities")
+    {
         EntitySystem ecs(tecs::ArenaAllocator(memory, MEGABYTES(1)), 1000);
         for (int i = 1; i <= 1000; ++i) {
             EntityHandle entity = ecs.newEntity();
@@ -104,7 +98,8 @@ TEST_CASE("Create all entities possible", "[entity]")
         }
     }
 
-    SECTION("10.000 entities") {
+    SECTION("10.000 entities")
+    {
         EntitySystem ecs(tecs::ArenaAllocator(memory, MEGABYTES(50)), 10'000);
         for (int i = 1; i <= 10'000; ++i) {
             EntityHandle entity = ecs.newEntity();
@@ -113,7 +108,8 @@ TEST_CASE("Create all entities possible", "[entity]")
     }
 
     // Starts to get too big for stack, so use dynamic allocation instead
-    SECTION("100.000 entities") {
+    SECTION("100.000 entities")
+    {
         EntitySystem ecs(tecs::ArenaAllocator(memory, MEGABYTES(50)), 100'000);
         for (int i = 1; i <= 100'000; ++i) {
             EntityHandle entity = ecs.newEntity();
@@ -124,51 +120,53 @@ TEST_CASE("Create all entities possible", "[entity]")
     delete[] memory;
 }
 
-
 TEST_CASE("Generation of new entities should invalidate references", "[entity]")
 {
     char* memory = new char[MEGABYTES(1)];
 
-    SECTION("check 1000 entities, every 3 are killed") {
+    SECTION("check 1000 entities, every 3 are killed")
+    {
         EntitySystem ecs(tecs::ArenaAllocator(memory, MEGABYTES(1)), 1000);
         EntityHandle handles[1000] = {};
         for (int i = 1; i <= 1000; ++i) {
             EntityHandle entity = ecs.newEntity();
-            handles[i-1] = entity;
+            handles[i - 1] = entity;
         }
 
-        for (int i = 0; i < 1000; i+=1) {
+        for (int i = 0; i < 1000; i += 1) {
             EntityHandle handle = handles[i];
             INFO("i: " << i << " Handle: " << handle);
             if (i % 3 == 0) {
                 ecs.removeEntity(handle);
                 REQUIRE(ecs.isEntityAlive(handle) == false);
                 REQUIRE(ecs.isEntityHandleValid(handle) == false);
-            } else { // Other ids should still be alive
+            }
+            else { // Other ids should still be alive
                 REQUIRE(ecs.isEntityAlive(handle) == true);
                 REQUIRE(ecs.isEntityHandleValid(handle) == true);
             }
         }
 
         // Re-check all to make sure nothing was corrupted
-        for (int i = 0; i < 1000; i+=1) {
+        for (int i = 0; i < 1000; i += 1) {
             EntityHandle handle = handles[i];
             INFO("i: " << i << " Handle: " << handle);
             if (i % 3 == 0) {
                 REQUIRE(ecs.isEntityAlive(handle) == false);
                 REQUIRE(ecs.isEntityHandleValid(handle) == false);
-            } else { // Other ids should be alive
+            }
+            else { // Other ids should be alive
                 REQUIRE(ecs.isEntityAlive(handle) == true);
                 REQUIRE(ecs.isEntityHandleValid(handle) == true);
             }
         }
-
     }
 
     delete[] memory;
 }
 
-TEST_CASE("Create entity starts with no components after reusing id", "[entity]")
+TEST_CASE("Create entity starts with no components after reusing id",
+          "[entity]")
 {
     constexpr u32 memSize = 1024 * 16;
     char memory[memSize];
@@ -181,22 +179,23 @@ TEST_CASE("Create entity starts with no components after reusing id", "[entity]"
     ecs.addComponent<Component1>(entity);
     REQUIRE(ecs.entityHasComponent<Component1>(entity));
     ecs.removeEntity(entity);
-    
+
     entity = ecs.newEntity();
     REQUIRE(!ecs.entityHasComponent<Component1>(entity));
 }
 
-
 TEST_CASE("Create many entities with one component", "[entity component]")
 {
     // Make sure our chunk and ids are used properly
-    SECTION("Components should be unique for unique entities") {
+    SECTION("Components should be unique for unique entities")
+    {
         MemoryReadyEcs ecs(MEGABYTES(1), 1000);
 
         std::set<void*> seen;
         for (int i = 0; i < 1000; ++i) {
             EntityHandle e = ecs.newEntity();
-            INFO("Entity Id: " << e.id << " Generation " << e.generation << " is alive: " << e.alive);
+            INFO("Entity Id: " << e.id << " Generation " << e.generation
+                               << " is alive: " << e.alive);
 
             Component1& c1 = ecs.addComponent<Component1>(e) = {1};
 
@@ -208,7 +207,6 @@ TEST_CASE("Create many entities with one component", "[entity component]")
     }
 }
 
-
 TEST_CASE("Loop entities with one component", "[entity loop]")
 {
     MemoryReadyEcs ecs(MEGABYTES(1), 1000);
@@ -217,18 +215,17 @@ TEST_CASE("Loop entities with one component", "[entity loop]")
         EntityHandle e = ecs.newEntity();
         ecs.addComponent<Component1>(e) = {i};
     }
-    
+
     int sumX = 0;
     int timesCalled = 0;
-    ecs.forEach<Component1>([&](EntityHandle e, Component1& c1){
+    ecs.forEach<Component1>([&](EntityHandle e, Component1& c1) {
         sumX += c1.x;
         ++timesCalled;
     });
     REQUIRE(timesCalled == 1000);
     // Sum of sequence, first is 0 so we have only 999 numbers!
-    REQUIRE(sumX == 999*(999+1)/2);
+    REQUIRE(sumX == 999 * (999 + 1) / 2);
 }
-
 
 TEST_CASE("Loop entities with two components", "[entity loop]")
 {
@@ -237,14 +234,14 @@ TEST_CASE("Loop entities with two components", "[entity loop]")
     for (int i = 0; i < 1000; ++i) {
         EntityHandle e = ecs.newEntity();
         ecs.addComponent<Component1>(e) = {i};
-        ecs.addComponent<Component2>(e) = {i, i*3};
+        ecs.addComponent<Component2>(e) = {i, i * 3};
     }
-    
+
     int sumX = 0;
     int sumX2 = 0;
     int sumY = 0;
     int timesCalled = 0;
-    ecs.forEach<Component1, Component2>([&](EntityHandle e, Component1& c1, Component2& c2){
+    ecs.forEach<Component1, Component2>([&](EntityHandle e, Component1& c1, Component2& c2) {
         sumX += c1.x;
         sumX2 += c2.x;
         sumY += c2.y;
@@ -252,12 +249,13 @@ TEST_CASE("Loop entities with two components", "[entity loop]")
     });
     REQUIRE(timesCalled == 1000);
     // Sum of sequence, first is 0 so we have only 999 numbers!
-    REQUIRE(sumX == 999*(999+1)/2);
+    REQUIRE(sumX == 999 * (999 + 1) / 2);
     REQUIRE(sumX == sumX2);
-    REQUIRE(sumY == sumX2*3);
+    REQUIRE(sumY == sumX2 * 3);
 }
 
-TEST_CASE("Loop entities 1000 entities only one entity has 2 components", "[entity loop]")
+TEST_CASE("Loop entities 1000 entities only one entity has 2 components",
+          "[entity loop]")
 {
     MemoryReadyEcs ecs(MEGABYTES(1), 1000);
 
@@ -282,7 +280,6 @@ TEST_CASE("Loop entities 1000 entities only one entity has 2 components", "[enti
         REQUIRE(sumX == 999 * (999 + 1) / 2);
     }
 
-
     SECTION("Check for just component 2 (only one instance has it)")
     {
         int sumX = 0;
@@ -305,7 +302,7 @@ TEST_CASE("Loop entities 1000 entities only one entity has 2 components", "[enti
         int sumY = 0;
         int sumX2 = 0;
         int timesCalled = 0;
-        ecs.forEach<Component1, Component2>([&](EntityHandle e, Component1& c1,  Component2& c2) {
+        ecs.forEach<Component1, Component2>([&](EntityHandle e, Component1& c1, Component2& c2) {
             sumX += c1.x;
             sumX2 += c2.x;
             sumY += c2.y;
@@ -319,8 +316,8 @@ TEST_CASE("Loop entities 1000 entities only one entity has 2 components", "[enti
     }
 }
 
-
-TEST_CASE("Destroyed entity must have it's components invalidated", "[entity components]")
+TEST_CASE("Destroyed entity must have it's components invalidated",
+          "[entity components]")
 {
     MemoryReadyEcs ecs(MEGABYTES(1), 1000);
 
