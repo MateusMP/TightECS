@@ -10,6 +10,17 @@ before using the ECS.
 The implementation tries to keep components of the same type packed together
 to be as cache friendly as possible.
 
+# Interesting Features
+- All allocations are constrained to a *tight* memory arena. Want to clear everything? just drop the arena and initiate the ECS again. This also helps in keeping your ECS working across boundaries.
+- Component references are guaranteed to be valid, independently if you add or remove more entities. Of course, if the entity or the component is removed, that reference no longer makes sense (you can still write data to it, but it might affect other entities) or components.
+- Components are *tight*ly packed in memory (as much as possible) in order to be cache-friendly when iterating over them.
+- Compile time type-safe API. Run-time types are planned to be supported as well.
+
+# Limitations
+- You must be able to provide unique sequential identifiers for your components. They don't need to be necessarely sequential, but must be small numbers to guarantee best memory utilization.
+- You are limited to the memory allocated to the ECS in the beginning, so you have a big cost upfront, however, you should have no issues with memory allocation after that (unless you try to create too many entities/components).
+
+
 # Build
 
 Use cmake to build the project.
