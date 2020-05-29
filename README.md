@@ -61,7 +61,7 @@ REGISTER_COMPONENT_TYPE(TypeProvider, Position, 1);
 REGISTER_COMPONENT_TYPE(TypeProvider, Velocity, 2);
 
 int main() {
-    // Feel free to allocate/manage the memory anyway you want. 
+    // Feel free to allocate/manage the memory any way you want. 
     constexpr u32 MEMORY_SIZE = 1024 * 1024 * 8;
     char* memory = new char[MEMORY_SIZE]; // Allocate 8MB
 
@@ -97,6 +97,25 @@ $ ./example1.exe
 Entity: EntityHandle(alive:1 v:0 id:1), Position: 2, 2
 Entity: EntityHandle(alive:1 v:0 id:2), Position: 3, 3
 ```
+
+### Benchmark:
+
+See [tests/benchmark.cpp](https://github.com/MateusMP/TightECS/tree/master/tests/benchmark.cpp) for implementation details.
+```
+Create 100.000 entities took: 0.002992 seconds
+Create 100.000 entities with 2 components took: 0.0149592 seconds
+Create 100.000 entities with 2 components took: 0.0009973 seconds
+Create 100.000 entities with 2 components sparse took: 0.0009974 seconds
+Create 100.000 entities with 2 components some missing took: 0.000997 seconds
+Iterate over 1M with 2 components took: 0.0139626 seconds
+Iterate over 1M with 2 components, some missing took: 0.0119679 seconds
+Iterate over 1M with 2 components, half contain components took: 0.0063857 seconds
+Iterate over 1M with 2 components, less than half took: 0.0059839 seconds
+```
+CPU: i7-9750H
+
+Note: The results may vary depending on computer configuration!
+
 
 # License
 

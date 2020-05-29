@@ -122,15 +122,15 @@ struct ChunkEmptyEntry {
 static constexpr u32 MaxComponentChunks = 32;
 
 struct ComponentContainer {
-    u32 idChunkSize = 256;
+    u32 idChunkSize = 512;
     u32 componentSize = 0;
 
     char** denseData; // char, but actually contains component data
-    EntityHandle** denseEntities;
     u32 chunkSize; // Amount of entries in each dense chunk
     u32 aliveComponents = 0;
     ChunkEmptyEntry freeComponentHandle = {0};
 
+    EntityHandle** denseEntities;
     u32** sparseIds; // Indexes the component for each entity
 };
 
@@ -379,13 +379,13 @@ public:
 
             ComponentContainer& c = ensureComponentContainer(compTypeId, sizeof(T));
 
-            const u32 sparseEntityIdx = entityHandle.id / c.idChunkSize;
+            const u32 idContainer = entityHandle.id / c.idChunkSize;
             const u32 denseEntityIdx = entityHandle.id % c.idChunkSize;
-            if (c.sparseIds[sparseEntityIdx] == nullptr) {
+            if (c.sparseIds[idContainer] == nullptr) {
                 return nullptr;
             }
             else {
-                u32 possibleHandle = c.sparseIds[sparseEntityIdx][denseEntityIdx];
+                u32 possibleHandle = c.sparseIds[idContainer][denseEntityIdx];
                 if (isComponentHandleValid(possibleHandle)) {
                     // Entity already contains the component
                     return (T*)accessComponentData(c, possibleHandle);
@@ -456,7 +456,7 @@ public:
         }
         else {
             TECS_LOG_ERROR(
-                "Trying to remove component of invalid entity handle! " << handle);
+                "Trying to remove component of invalid entity handle! " << entityHandle);
         }
     }
 
@@ -704,12 +704,10 @@ private:
         ComponentContainer& c = containers[typeId];
         if (c.componentSize == 0) {
             c.componentSize = compSize;
-            c.chunkSize = 1024 * 4 / c.componentSize; // TODO: define something
-                                                      // that uses cache lines
-                                                      // well
-            // Alloc sparse ids array. Make sure to include all possible entries
-            // with +1 for fraction
-            u32 size = maxEntities / c.idChunkSize + 1;
+            // Make sure to include all possible entries
+            // with +1 to round up
+            c.chunkSize = (maxEntities / MaxComponentChunks) + 1;
+            u32 size = (maxEntities / c.idChunkSize) + 1;
             c.sparseIds = allocator.alloc<u32*>(size);
             c.denseData = allocator.alloc<char*>(MaxComponentChunks);
             c.denseEntities = allocator.alloc<EntityHandle*>(MaxComponentChunks);
@@ -720,8 +718,13 @@ private:
         return c;
     }
 
+    inline EntityHandle& denseEntity(tecs::ComponentContainer& c, const u32 entity) {
+        return c.denseEntities[entity / c.chunkSize][entity % c.chunkSize];
+    }
+
     void* accessComponentData(tecs::ComponentContainer& c, const u32 componentHandle)
     {
+        TECS_ASSERT(componentHandle <= c.chunkSize * MaxComponentChunks, "no enough space!");
         u32 compSparse = componentHandle / c.chunkSize;
         if (c.denseData[compSparse] == nullptr) {
             // Allocate dense data chunk
@@ -738,7 +741,7 @@ private:
     void pushDenseEntity(ComponentContainer& c, EntityHandle entity)
     {
         ++c.aliveComponents;
-        c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize] = entity;
+        denseEntity(c, c.aliveComponents) = entity;
     }
 
     struct TypeAmount {
@@ -781,9 +784,8 @@ private:
         // This then will point to the next valid data index
         // TODO: Consider if this is worth it since we might be fragmenting the vector...
         // TODO: Do some benchmarks related to this
-        c.denseEntities[sparseIdx][denseIdx] =
-            c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize];
-        c.denseEntities[c.aliveComponents / c.chunkSize][c.aliveComponents % c.chunkSize] = {};
+        denseEntity(c, freeHandle) = denseEntity(c, c.aliveComponents);
+        denseEntity(c, c.aliveComponents) = {};
 
         ((ChunkEmptyEntry*)(c.denseData[sparseIdx] + denseIdx * c.componentSize))->nextFree =
             c.freeComponentHandle.nextFree;
